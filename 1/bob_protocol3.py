@@ -41,7 +41,7 @@ def prime_factor(n: int) -> set[int]:
     _n = n
     factors = set()
     for p in create_primality_array(int(n ** 0.5)):
-        while n % p == 0:
+        while _n % p == 0:
             factors.add(p)
             _n //= p
         if _n == 1: return factors
@@ -51,7 +51,7 @@ def prime_factor(n: int) -> set[int]:
 
 
 def is_primitive_root(g: int, p: int) -> bool:
-    return is_prime(p) and all([pow(g, k, p) != 1 for k in prime_factor(p)])
+    return is_prime(p) and all([pow(g, (p - 1) // k, p) != 1 for k in prime_factor(p - 1)])
 
 
 def generate_prime_between(a=MIN_PRIME, b=MAX_PRIME) -> int:
@@ -86,11 +86,39 @@ def generate_dh_key(a=MIN_PRIME, b=MAX_PRIME):
     return p, g
 
 
-def encrypt(key, msg):
-    pad = BLOCK_SIZE - len(msg)
-    msg = msg + pad * chr(pad)
+# ====== encryption ======
+
+
+def pkcs7_pad(data: bytes, block_size: int = 16) -> bytes:
+    rem = len(data) % block_size
+    pad_len = block_size - rem if rem != 0 else block_size
+    return data + bytes([pad_len]) * pad_len
+
+
+def pkcs7_unpad(data: bytes, block_size: int = 16) -> bytes:
+    if not data or len(data) % block_size != 0:
+        raise ValueError("invalid padding length")
+    pad_len = data[-1]
+    if not (1 <= pad_len <= block_size):
+        raise ValueError("invalid padding value")
+    if data[-pad_len:] != bytes([pad_len]) * pad_len:
+        raise ValueError("invalid padding pattern")
+    return data[:-pad_len]
+
+
+def aes_encrypt(key, plain_text):
     aes = AES.new(key, AES.MODE_ECB)
-    return aes.encrypt(msg.encode())
+    cipher_text = aes.encrypt(pkcs7_pad(plain_text.encode('utf-8'), BLOCK_SIZE))
+    return base64.b64encode(cipher_text).decode('utf-8')
+
+
+def aes_decrypt(key, cipher_text):
+    aes = AES.new(key, AES.MODE_ECB)
+    plain_text = aes.decrypt(base64.b64decode(cipher_text))
+    return pkcs7_unpad(plain_text, BLOCK_SIZE).decode('utf-8')
+
+
+# ====== communication ======
 
 
 def receive_json(client, timeout=10., buffer_size=4096) -> dict:
@@ -98,9 +126,8 @@ def receive_json(client, timeout=10., buffer_size=4096) -> dict:
 
     try:
         received_bytes = client.recv(buffer_size)
-        if not received_bytes:
-            logging.info('[*] Received empty bytes. AI assumes client disconnected gracefully.')
-            return dict()
+        logging.debug(f"received {len(received_bytes)} bytes from client")
+        if not received_bytes: return dict()
         received_str = received_bytes.decode('utf-8').strip()
         return json.loads(received_str)
 
@@ -126,24 +153,41 @@ def send_json(client, json_dict: dict):
     client.send((json.dumps(json_dict)).encode('utf-8'))
 
 
-def run_protocol(client: socket.socket):
+def run_protocol(client: socket.socket, msg: str):
     random.seed(None)
+    p, g = generate_dh_key()
+    b = random.randint(2, p - 2)
+    aes_key = b'\x00' * 32
 
     while True:
         received_dict = receive_json(client)
+        logging.info(f'[*] received: {received_dict}')
 
         match received_dict['opcode']:
             case 0:
                 p, g = generate_dh_key()
                 b = random.randint(2, p - 2)
-                public_key = pow(g, b, p).to_bytes(2, byteorder='big') * 16
                 send_json(client, {
                     'opcode': 1,
                     'type': 'DH',
-                    'public': public_key.decode('utf-8'),
+                    'public': pow(g, b, p),
                     'parameter': {'p': p, 'g': g}
                 })
-            case default: break
+            case 1:
+                client_public_key = received_dict['public']
+                aes_key = pow(client_public_key, b, p).to_bytes(2, byteorder='big') * 16
+                logging.info(f'[*] aes_key: {pow(client_public_key, b, p)}')
+                send_json(client, {
+                    'opcode': 2,
+                    'type': 'AES',
+                    'encryption': aes_encrypt(aes_key, msg)
+                })
+                logging.info(f'[*] Sent message: “{msg}”')
+            case 2:
+                client_cipher = received_dict['encryption']
+                logging.info(f'[*] Received message: {aes_decrypt(aes_key, client_cipher)}')
+            case default:
+                break
 
     client.close()
 
@@ -161,7 +205,7 @@ def run(addr, port, msg):
             client, client_addr = server.accept()
             logging.info("[*] Bob accepts the connection from {}:{}".format(client_addr[0], client_addr[1]))
 
-            conn_handle = threading.Thread(target=run_protocol, args=(client,))
+            conn_handle = threading.Thread(target=run_protocol, args=(client, msg))
             conn_handle.start()
             conn_handle.join()
 
