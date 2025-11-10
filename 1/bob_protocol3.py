@@ -158,9 +158,11 @@ def run_protocol(client: socket.socket, msg: str):
     p, g = generate_dh_key()
     b = random.randint(2, p - 2)
     aes_key = b'\x00' * 32
+    received_dict = dict()
 
     while True:
-        received_dict = receive_json(client)
+        while received_dict:
+            received_dict = receive_json(client)
         logging.info(f'[*] received: {received_dict}')
 
         match received_dict['opcode']:
