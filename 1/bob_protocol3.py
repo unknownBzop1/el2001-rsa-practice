@@ -178,7 +178,6 @@ def run_protocol(client: socket.socket, msg: str):
             case 1:
                 client_public_key = received_dict['public']
                 aes_key = pow(client_public_key, b, p).to_bytes(2, byteorder='big') * 16
-                logging.info(f'[*] aes_key: {pow(client_public_key, b, p)}')
                 send_json(client, {
                     'opcode': 2,
                     'type': 'AES',
