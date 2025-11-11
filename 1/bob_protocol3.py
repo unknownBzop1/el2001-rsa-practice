@@ -16,6 +16,7 @@ MIN_PRIME, MAX_PRIME = 400, 500
 # ---------- RSA util ----------
 _primalities = [False, False, True]
 def create_primality_array(n: int) -> list[int]:
+    # 에라토스테네스의 체를 사용하여 2부터 n까지의 소수를 오름차순으로 list 반환
     global _primalities
     if n < 2: return []
     if n < len(_primalities): return [i for i, b in enumerate(_primalities) if b]
@@ -30,12 +31,12 @@ def create_primality_array(n: int) -> list[int]:
     return [i for i, b in enumerate(primalities) if b]
 
 
-def is_prime(n: int) -> bool:
+def is_prime(n: int) -> bool:   # 소수 판별
     if n < len(_primalities): return _primalities[n]
-    return all([n % p != 0 for p in create_primality_array(int(n ** 0.5))])
+    return all([p * p < n and n % p != 0 for p in create_primality_array(int(n ** 0.5))])
 
 
-def prime_factor(n: int) -> set[int]:
+def prime_factor(n: int) -> set[int]:  # 소인수 분해 (중복 제거)
     if is_prime(n): return {n}
 
     _n = n
@@ -50,17 +51,17 @@ def prime_factor(n: int) -> set[int]:
     return factors
 
 
-def is_primitive_root(g: int, p: int) -> bool:
+def is_primitive_root(g: int, p: int) -> bool:  # g가 mod p의 원시근(generator)인지 판별
     return is_prime(p) and all([pow(g, (p - 1) // k, p) != 1 for k in prime_factor(p - 1)])
 
 
-def generate_prime_between(a=MIN_PRIME, b=MAX_PRIME) -> int:
+def generate_prime_between(a=MIN_PRIME, b=MAX_PRIME) -> int:  # a와 b 사이의 소수 생성
     while True:
         r = random.randint(a, b)
         if is_prime(r): return r
 
 
-def generate_rsa_key(a=MIN_PRIME, b=MAX_PRIME):
+def generate_rsa_key(a=MIN_PRIME, b=MAX_PRIME) -> tuple[int, int, int, int, int]:  # RSA 암호 키 p, q, n, e, d 생성
     p = generate_prime_between(a, b)
     while True:
         q = generate_prime_between(a, b)
@@ -78,7 +79,7 @@ def generate_rsa_key(a=MIN_PRIME, b=MAX_PRIME):
     return p, q, n, e, d
 
 
-def generate_dh_key(a=MIN_PRIME, b=MAX_PRIME):
+def generate_dh_key(a=MIN_PRIME, b=MAX_PRIME) -> tuple[int, int]:  # 디피-헬만 키 생성
     p = generate_prime_between(a, b)
     while True:
         g = random.randint(2, p - 2)
@@ -87,6 +88,7 @@ def generate_dh_key(a=MIN_PRIME, b=MAX_PRIME):
 
 
 # ====== encryption ======
+# alice_protocol3.py의 코드에서 가져옴
 
 
 def pkcs7_pad(data: bytes, block_size: int = 16) -> bytes:
@@ -104,15 +106,16 @@ def pkcs7_unpad(data: bytes, block_size: int = 16) -> bytes:
     if data[-pad_len:] != bytes([pad_len]) * pad_len:
         raise ValueError("invalid padding pattern")
     return data[:-pad_len]
+# 여기까지 가져옴
 
 
-def aes_encrypt(key, plain_text):
+def aes_encrypt(key, plain_text) -> str:
     aes = AES.new(key, AES.MODE_ECB)
     cipher_text = aes.encrypt(pkcs7_pad(plain_text.encode('utf-8'), BLOCK_SIZE))
     return base64.b64encode(cipher_text).decode('utf-8')
 
 
-def aes_decrypt(key, cipher_text):
+def aes_decrypt(key, cipher_text) -> str:
     aes = AES.new(key, AES.MODE_ECB)
     plain_text = aes.decrypt(base64.b64decode(cipher_text))
     return pkcs7_unpad(plain_text, BLOCK_SIZE).decode('utf-8')
@@ -122,6 +125,8 @@ def aes_decrypt(key, cipher_text):
 
 
 def receive_json(client, timeout=10., buffer_size=4096) -> dict:
+    # json dict형으로 받기
+    # opcode = -1은 상대가 통신을 종료했으므로 송신하지 않음
     client.settimeout(timeout)
 
     try:
@@ -156,7 +161,7 @@ def receive_json(client, timeout=10., buffer_size=4096) -> dict:
         return {'opcode': 3, 'error': 'unhandled exception', 'exception': e}
 
 
-def send_json(client, json_dict: dict):
+def send_json(client, json_dict: dict):  # json 보내기
     client.send((json.dumps(json_dict)).encode('utf-8'))
     logging.info(f'[*] Sent: {json_dict}')
 
@@ -172,7 +177,7 @@ def run_protocol(client: socket.socket, msg: str):
         while not received_dict: received_dict = receive_json(client)
 
         match received_dict['opcode']:
-            case 0:
+            case 0:  # 요청. 'tyoe': 'DH'가 전제되어 있음
                 p, g = generate_dh_key()
                 b = random.randint(2, p - 2)
                 send_json(client, {
@@ -181,7 +186,7 @@ def run_protocol(client: socket.socket, msg: str):
                     'public': pow(g, b, p),
                     'parameter': {'p': p, 'g': g}
                 })
-            case 1:
+            case 1:  # 암호키 전달. 'type': 'DH'가 전제되어 있음
                 client_public_key = received_dict['public']
                 aes_key = pow(client_public_key, b, p).to_bytes(2, byteorder='big') * 16
                 send_json(client, {
@@ -190,12 +195,12 @@ def run_protocol(client: socket.socket, msg: str):
                     'encryption': aes_encrypt(aes_key, msg)
                 })
                 logging.info(f'[*] Sent message: “{msg}”')
-            case 2:
+            case 2:  # 암호화된 메시지 전달. 'type': 'DH'가 전제되어 있음
                 client_cipher = received_dict['encryption']
                 logging.info(f'[*] Received message: {aes_decrypt(aes_key, client_cipher)}')
-            case 3:
+            case 3:  # 에러 메시지. alice_protocol3.py에서 가져옴
                 send_json(client, received_dict)
-            case -1:
+            case -1:  # 송신이 끊어졌으니 종료
                 break
 
     client.close()
@@ -218,7 +223,7 @@ def run(addr, port, msg):
             conn_handle.start()
             conn_handle.join()
 
-        except KeyboardInterrupt:
+        except KeyboardInterrupt:  # 이 코드에 어떤 수를 써서든 도달하고 싶은데...
             logging.info("[*] Bob closed all connections. GOODBYE!")
             break
 
