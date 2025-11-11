@@ -126,31 +126,39 @@ def receive_json(client, timeout=10., buffer_size=4096) -> dict:
 
     try:
         received_bytes = client.recv(buffer_size)
-        logging.debug(f"received {len(received_bytes)} bytes from client")
-        if not received_bytes: return dict()
+        logging.debug(f"[*] Received {len(received_bytes)} bytes from client")
+        if not received_bytes:
+            logging.error('[*] Received empty bytes. Client seems to have disconnected.')
+            return {'opcode': -1, 'error': 'client disconnected'}
         received_str = received_bytes.decode('utf-8').strip()
+        logging.info(f'[*] Received: {json.loads(received_str)}')
         return json.loads(received_str)
 
     except socket.timeout:
         logging.warning('[*] TIMEOUT')
-        return dict()
+        return {'opcode': 3, 'error': 'timeout'}
 
     except ConnectionResetError:
         logging.error('[*] ConnectionResetError')
-        return dict()
+        return {'opcode': -1, 'error': 'connection reset / refused'}
 
     except json.JSONDecodeError as e:
         logging.error(f'[*] JSONDecodeError: {e}. Received the following str:')
         logging.error(received_str)
-        return dict()
+        return {'opcode': 3, 'error': 'invalid JSON format'}
+
+    except KeyboardInterrupt:
+        logging.warning('[*] KeyboardInterrupt')
+        return {'opcode': -1, 'error': 'KeyboardInterrupt'}
 
     except Exception as e:
         logging.error(f'[*] Exception: {e}')
-        return dict()
+        return {'opcode': 3, 'error': 'unhandled exception', 'exception': e}
 
 
 def send_json(client, json_dict: dict):
     client.send((json.dumps(json_dict)).encode('utf-8'))
+    logging.info(f'[*] Sent: {json_dict}')
 
 
 def run_protocol(client: socket.socket, msg: str):
@@ -158,12 +166,10 @@ def run_protocol(client: socket.socket, msg: str):
     p, g = generate_dh_key()
     b = random.randint(2, p - 2)
     aes_key = b'\x00' * 32
-    received_dict = dict()
 
     while True:
-        while received_dict:
-            received_dict = receive_json(client)
-        logging.info(f'[*] received: {received_dict}')
+        received_dict = dict()
+        while not received_dict: received_dict = receive_json(client)
 
         match received_dict['opcode']:
             case 0:
@@ -187,7 +193,9 @@ def run_protocol(client: socket.socket, msg: str):
             case 2:
                 client_cipher = received_dict['encryption']
                 logging.info(f'[*] Received message: {aes_decrypt(aes_key, client_cipher)}')
-            case default:
+            case 3:
+                send_json(client, received_dict)
+            case -1:
                 break
 
     client.close()
