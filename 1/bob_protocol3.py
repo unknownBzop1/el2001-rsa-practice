@@ -5,7 +5,6 @@ import logging
 import json
 import random
 import base64
-from typing import Tuple
 from math import lcm
 from Crypto.Cipher import AES
 
@@ -166,7 +165,7 @@ def send_json(client, json_dict: dict):  # json 보내기
     logging.info(f'[*] Sent: {json_dict}')
 
 
-def run_protocol(client: socket.socket, msg: str):
+def run_server_protocol(client: socket.socket, msg: str):
     random.seed(None)
     p, g = generate_dh_key()
     b = random.randint(2, p - 2)
@@ -177,7 +176,7 @@ def run_protocol(client: socket.socket, msg: str):
         while not received_dict: received_dict = receive_json(client)
 
         match received_dict['opcode']:
-            case 0:  # 요청. 'tyoe': 'DH'가 전제되어 있음
+            case 0:  # 요청. 'type': 'DH'가 전제되어 있음
                 p, g = generate_dh_key()
                 b = random.randint(2, p - 2)
                 send_json(client, {
@@ -219,7 +218,7 @@ def run(addr, port, msg):
             client, client_addr = server.accept()
             logging.info("[*] Bob accepts the connection from {}:{}".format(client_addr[0], client_addr[1]))
 
-            conn_handle = threading.Thread(target=run_protocol, args=(client, msg))
+            conn_handle = threading.Thread(target=run_server_protocol, args=(client, msg))
             conn_handle.start()
             conn_handle.join()
 
@@ -228,7 +227,7 @@ def run(addr, port, msg):
             break
 
 
-def command_line_args():
+def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("-a", "--addr", metavar="<bob's IP address>", help="Bob's IP address", type=str, default="0.0.0.0")
     parser.add_argument("-p", "--port", metavar="<bob's open port>", help="Bob's port", type=int, required=True)
@@ -239,9 +238,8 @@ def command_line_args():
 
 
 def main():
-    args = command_line_args()
-    log_level = args.log
-    logging.basicConfig(level=log_level)
+    args = parse_args()
+    logging.basicConfig(level=args.log.upper())
 
     run(args.addr, args.port, args.message)
 
